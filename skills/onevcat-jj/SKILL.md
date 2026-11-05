@@ -1,247 +1,168 @@
 ---
 name: onevcat-jj
-description: "Use jj (Jujutsu) for local version control instead of git. Activate when: the repo has a .jj/ directory, the user or project config mentions jj, the user says 'use jj', or any version control operation is needed in a jj-managed repo. Also use this skill when the user asks to commit, branch, stash, rebase, or perform any git-like operation in a repo that uses jj. If unsure whether the repo uses jj, check for a .jj/ directory."
+description: "Use jj (Jujutsu) for local version control in jj-managed repositories. Activate when the user or project requests jj, or version-control work is needed in a repository where jj root identifies the current workspace."
 ---
 
 # jj (Jujutsu) — Version Control for Agent Workflows
 
-jj is a version control tool that coexists with Git. You use jj locally; the remote is still standard Git. GitHub and collaborators see ordinary git commits and branches.
+jj is a Git-compatible version control tool. Use jj locally; GitHub and collaborators see ordinary Git commits and branches.
 
-This skill teaches you how to use jj correctly and idiomatically, especially in agent-assisted development workflows.
+## Version and Repository Checks
+
+This guidance targets **jj 0.46.0**, which requires Git **2.42.0 or newer**. Check the installed version and use its help when behavior differs:
+
+~~~bash
+jj --version
+git --version
+jj root
+jj --no-pager status
+jj --no-pager log -n 10
+~~~
+
+Run these from the intended workspace. A .jj directory may be in an ancestor. In a plain Git worktree nested under a jj repository, compare jj root with git rev-parse --show-toplevel before any snapshotting or mutation: jj may resolve to the parent workspace. Do not modify that parent accidentally.
+
+In colocated mode, .git may be a directory or a file (including jj 0.46 child workspaces). Prefer jj for local mutations; read-only Git interoperability checks are useful. Do not introduce jj into a Git-only repository unless requested.
 
 ## Core Mental Model
 
-jj revolves around **changes**, not branches. Key differences from Git:
+- **The working copy is a change**, referenced as @. File edits are snapshotted when a snapshotting jj command runs, not on every file write. Run jj status after edits before relying on recovery history. Ignored, untracked, or oversized new files may not be included; inspect warnings.
+- **No staging area.** There is no git add step.
+- **No stash needed.** jj new starts a child change and preserves the previous work.
+- **Changes are mutable.** Editing an ancestor automatically rebases descendants, potentially creating conflicts.
+- **Change IDs and commit IDs differ.** Change IDs survive rewrites; commit hashes change. Use unique change-ID prefixes for normal work. Hidden/divergent revisions can require the xyz/0, xyz/1 syntax or an exact commit ID.
+- **Bookmarks are explicit references.** They do not automatically advance to newly created child changes. @- means the parent of @, not necessarily the work to publish.
+- **Immutability comes from configuration and revsets**, not simply whether a commit was pushed. Do not bypass it with --ignore-immutable merely to make a command succeed.
 
-- **No staging area.** File modifications are automatically part of the current change. There is no `git add`.
-- **No stash.** Just `jj new` to start fresh work; previous changes stay where they are.
-- **No detached HEAD.** `jj edit` lets you jump to any change and keep working; descendants auto-rebase.
-- **Branches are called bookmarks** and are only needed when pushing to a remote.
+## Non-Interactive Agent Commands
 
-The working copy IS a change. Every file modification is instantly tracked in the current change.
+Use --no-pager for output commands and explicit messages for commands that may open an editor. Do not change the user's global pager/editor settings to accommodate automation.
 
-## Detecting a jj Repo
+~~~bash
+jj --no-pager status
+jj --no-pager diff
+jj --no-pager diff -r <change>
+jj describe -m "feat: add auth module"
+jj describe -r <change> -m "new description"
+jj new                         # preserve current change; start an empty child
+jj new <change>                # start a child of a specific change
+jj commit -m "feat: add auth"   # describe current change, then start an empty child
+jj edit <change>               # continue editing an existing mutable change
+~~~
 
-Before performing version control operations, check if the repo uses jj:
+For multiline descriptions use jj describe --stdin with a quoted heredoc, or a message file outside the repository. A file inside the repository could be snapshotted into the change.
 
-```bash
-# If .jj/ exists, use jj commands — not git commands
-test -d .jj && echo "jj repo"
-```
-
-When a repo has both `.jj/` and `.git/` (colocated mode), always prefer jj commands for local operations.
+Respect the user's scope and project approval rules. Loading this skill does not authorize creating commits, rewriting history, deleting workspaces, pushing, or opening PRs.
 
 ## Setup
 
-To initialize jj in an existing Git repo (colocated mode — keeps `.git/` alongside `.jj/`):
+Initialize only when requested, from the intended Git checkout:
 
-```bash
+~~~bash
 jj git init --colocate
-```
+jj bookmark track master --remote origin
+~~~
 
-After init, you may need to track remote bookmarks so jj knows about remote branches:
+Replace master and origin with the actual branch and remote. The old bookmark@remote form for bookmark track/untrack is deprecated; use the separate --remote argument. Revision references such as master@origin remain valid.
 
-```bash
-jj bookmark track master@origin        # Track a specific remote branch
-```
+Use jj config commands rather than assuming repository configuration lives under .jj: since 0.38, repository/workspace configuration is stored externally. In 0.45+, config set/edit/unset --user targets the first loaded user config; use --file <path> when a specific file matters.
 
-jj will usually hint you about this if it's needed.
+## Reorganize History
 
-## Essential Commands
+Inspect the target and diff before a rewrite, then verify status and the graph afterward.
 
-### Inspect State
+~~~bash
+jj split <paths> -m "feat: first logical piece"
+jj squash --from <source> --into <destination> --use-destination-message
+jj rebase -s <source> -d <destination>  # source and descendants
+jj rebase -r <change> -d <destination> # selected change
+jj abandon <change>
+~~~
 
-```bash
-jj log                    # Show change graph + status (replaces git log + git status)
-jj diff                   # Show diff of current change vs parent
-jj diff -r <change>       # Show diff of a specific change
-```
+Use explicit filesets plus -m for non-interactive splitting. Bare jj split opens a diff editor; in 0.46, interactive splitting uses one description-editor session for the resulting commits. Avoid bare squash when it could open an editor; supply -m or --use-destination-message.
 
-`jj log` output shows `@` for the current change and short Change IDs (e.g., `kxryzmsp`). Change IDs are stable across rebases — use them freely as references. You can use unique prefixes (e.g., `kx` instead of `kxryzmsp`) as long as they are unambiguous.
+**jj abandon discards the change's own diff** and rebases descendants onto its parents. It does not absorb the diff into its parent. Bookmarks on abandoned changes normally move to their parents; abandoning is not a reliable way to delete a bookmark or a remote branch. Inspect the result and delete the bookmark explicitly when intended.
 
-### Work on Changes
+## Remote Interaction
 
-```bash
-jj describe -m "feat: add auth module"   # Set/update description of current change
-jj describe -r <change> -m "new msg"     # Update description of any change
-jj new                                    # Finish current change, start a new empty one
-jj new <change>                           # Start new work branching from a specific change
-jj commit -m "feat: ..."                  # Shorthand: describe current + start new (equivalent to describe + new)
-jj edit <change>                          # Jump to an existing change and continue editing it
-jj abandon                                # Discard the current change entirely
-jj abandon <change>                       # Discard a specific change
-```
+~~~bash
+jj git fetch
+jj rebase -d <default-branch>
+jj bookmark create my-feature -r <completed-change>
+jj git push --bookmark my-feature
+~~~
 
-**`jj new` is your primary "next task" command.** It seals the current change and gives you a fresh workspace. No add, no commit ceremony.
+Resolve the actual default branch; do not assume main or master exists. New bookmarks can be pushed explicitly with --bookmark; --allow-new was removed in 0.42. Describe every commit in the range being pushed, and inspect for conflicts and private commits.
 
-**`jj abandon`** discards a change completely. The change's modifications are absorbed into its parent. Use it to clean up empty changes, throw away unwanted work, or remove a change from a chain.
+To update a PR, point its bookmark at the change that actually contains the work:
 
-**`jj edit` is safe:** if the target change is immutable (already pushed to remote), jj will refuse with an error. You do not need to check this yourself.
+~~~bash
+jj new my-feature -m "fix: address review feedback"
+# edit files, then snapshot and inspect
+jj --no-pager status
+jj --no-pager diff
+jj bookmark set my-feature -r @
+jj git push --bookmark my-feature
+~~~
 
-After `jj edit`, modifying files amends that change in place. All descendant changes auto-rebase — you never need to manually rebase after editing an ancestor.
+If jj commit or jj new has already created an empty child after completing the work, the completed change may instead be @-. Inspect the graph before choosing. Editing the existing bookmarked change rewrites it in place; do not move the bookmark back to @- afterward. Rewriting published history requires the appropriate user/project authorization.
 
-### Reorganize History
+For intentional branch deletion, use jj bookmark delete <name>, inspect remote deletions, and only then jj git push --deleted. That flag may publish multiple pending deletions.
 
-```bash
-jj split                                 # Interactively split current change into two (or more)
-jj split -r <change>                     # Split a specific change
-jj rebase -s <source> -d <destination>   # Move a change (and its descendants) to a new parent
-jj rebase -d <destination>               # Rebase current branch onto destination
-jj undo                                  # Undo the last jj operation (any operation)
-jj op log                                # View operation-level history
-jj op restore <operation-id>             # Restore repo to any previous operation state
-```
+Since 0.44, tags have remote tracking state: fetched tags are tracked by default, and tracked tags participate in pushes. jj git push --all includes tags as well as bookmarks. Prefer an explicit bookmark for a branch-only push. In 0.46, --remote can be repeated and accepts patterns; inspect targets before pushing to multiple remotes.
 
-`jj split` opens an interactive editor by default (when no filesets are given). Select which files/hunks belong to the first change; the rest automatically become the second. Repeat to split further.
+In colocated workspaces, jj git import/export are disabled by default since 0.44. Do not prescribe them as routine synchronization or bypass the restriction blindly; inspect jj status and installed help when diagnosing Git interoperability.
 
-`jj undo` undoes the last operation regardless of what it was — rebase, split, describe, anything. It is always safe. Nothing is ever truly lost in jj.
+## Parallel Workspaces
 
-### Remote Interaction (Git Bridge)
+~~~bash
+jj workspace add ../workspace-name
+jj workspace list
+jj git colocation status
+~~~
 
-```bash
-jj git fetch                             # Fetch from remote (like git fetch)
-jj rebase -d master                      # Rebase current work onto latest master
-jj bookmark track master@origin          # Track a remote branch (needed after init or for new remotes)
-jj bookmark create my-feature -r @       # Create a bookmark (= git branch) pointing at current change
-jj bookmark create my-feature -r <chg>   # Create a bookmark pointing at a specific change
-jj bookmark set my-feature -r <change>   # Move an existing bookmark to a different change
-jj git push                              # Push all changed bookmarks to remote
-jj git push --bookmark my-feature        # Push only a specific bookmark
-jj git push --deleted                    # Push bookmark deletions to remote (after jj abandon)
-```
+Each workspace has its own directory and @, but shares repository history, bookmarks, and the operation log. Give concurrent writers separate workspaces and changes; do not jj edit a change another workspace is actively editing.
 
-Remote Git branches are automatically mapped to jj **bookmarks** on fetch. The `master` (or `main`) you see in `jj log` IS the remote branch, accessed via bookmark.
+In 0.46, workspace add can create a Git worktree alongside the jj workspace. In a colocated workspace this is the default when git.colocate is true. Use --colocate or --no-colocate explicitly when the mode matters. Child workspaces support jj git colocation status/enable/disable.
 
-After `jj git init --colocate` or when a new remote branch appears, you may need `jj bookmark track <name>@<remote>` to tell jj to follow it. jj will hint you when this is needed.
+Before removing a workspace, inspect and snapshot its final edits inside that workspace. With authorization, jj workspace remove <name> snapshots its working-copy state and removes its directory. This deletes on-disk files; ignored/untracked files may not be recoverable from jj. jj workspace forget <name> unregisters it (and removes its associated Git worktree when present) but does not snapshot another workspace's pending edits. Do not substitute an unchecked rm -rf cleanup recipe.
 
-**Workflow for pushing:**
-1. Finish your work (describe the change)
-2. `jj bookmark create <name> -r <change>` — give it a Git branch name
-3. `jj git push` — push to remote (or `--bookmark <name>` for just one)
+## Undo, Conflicts, and Recovery
 
-**Cleanup after abandoning a pushed change:**
-When you `jj abandon` a change that had a bookmark pushed to remote, the bookmark is deleted locally. Use `jj git push --deleted` to sync that deletion to the remote.
+~~~bash
+jj --no-pager op log -n 10
+jj undo
+jj redo
+~~~
 
-### Parallel Workspaces
+In 0.46, undo/redo refuse operations performed in another workspace by default. --allow-cross-workspace overrides this guard only when intentionally authorized after inspecting the shared operation history. Never assume undo is harmless in a shared repository.
 
-```bash
-jj workspace add ../workspace-name       # Create a parallel workspace (like git worktree)
-```
+jj op restore <operation-id> restores repository state and can affect other workspaces and bookmarks. Prefer recovering only the affected change when others are working:
 
-Each workspace gets its own directory but shares the underlying repository store. Multiple agents can work in separate workspaces simultaneously from the same base, then merge results with `jj new <change1> <change2> ...`.
+~~~bash
+jj --no-pager evolog -r <change> -p
+jj restore --from <old-commit> --to <change> <paths>
+~~~
 
-## Agent Workflow Patterns
+Operation history is a recovery aid, not an indefinite backup; unsnapshotted or ignored files and remote side effects are not restored by undo.
 
-These patterns leverage jj's strengths for agent-assisted development.
+Conflicts are recorded in commits; a rebase can complete with conflicts. Inspect jj status, edit conflict markers to the intended content, then snapshot and verify. Avoid interactive merge tools in unattended runs. For divergent changes, inspect the versions and consider jj converge (added in 0.45); use its non-interactive mode only after checking installed help and reviewing the intended result.
 
-### Pattern 1: Start Next Task
+## Common Agent Patterns
 
-Just `jj new` and begin. No need to add, commit, push, or create a branch first. The previous change is automatically preserved.
+- **Next task:** describe the completed change, then jj new for the next unit.
+- **Interrupt and resume:** jj new <base> for urgent work, then jj edit <previous-change> to resume. Verify each target first.
+- **Split after the fact:** select paths with jj split <paths> -m "message"; inspect both resulting changes.
+- **Plan complex work:** create separate changes only when useful and authorized; do not manufacture empty commit sequences by default.
 
-```bash
-jj new
-jj describe -m "feat: implement avatar upload"
-# start working...
-```
+## Further Help
 
-### Pattern 2: Interrupt and Resume
+~~~bash
+jj --no-pager help
+jj --no-pager help <command>
+jj --no-pager help -k revsets
+~~~
 
-To handle an urgent task mid-work:
+For advanced templates/configuration, note the 0.46 changes: list get/first/last return Option values, and fix.tools.<name>.line-range-args is an array replacing line-range-arg. Do not copy older snippets without checking their types and options.
 
-```bash
-jj new master            # Branch off master for the urgent fix
-# ... do the fix ...
-jj describe -m "fix: critical auth bug"
-jj edit <previous-change> # Jump back to where you were
-# ... resume previous work ...
-```
-
-No stash, no branch switching, no state to restore.
-
-### Pattern 3: Split After the Fact
-
-After producing a large change, split it into logical pieces:
-
-```bash
-jj split                 # Interactive: pick files/hunks for first change, rest goes to second
-jj split                 # Split again if needed
-```
-
-If a split goes wrong, `jj undo` and try again.
-
-### Pattern 4: Skeleton Planning (Recommended for Complex Tasks)
-
-Create empty changes as a plan, then fill them in order:
-
-```bash
-jj commit -m "refactor: extract auth module"
-jj commit -m "feat: add token refresh logic"
-jj commit -m "test: update auth tests"
-jj commit -m "docs: update API documentation"
-```
-
-Then work through them:
-
-```bash
-jj edit <first-change>   # Jump to first skeleton change
-# ... implement ...
-jj edit <next-change>    # Jump to next (previous work auto-rebases descendants)
-# ... implement ...
-```
-
-Each change's description serves as both the commit message and the acceptance criteria. Verify your implementation matches the description before moving on.
-
-The description field supports the same format as git commit messages: first line is the title, blank line, then body. You can write detailed specs or prompts in the body with `-m`.
-
-### Pattern 5: Undo and Recover
-
-```bash
-jj undo                  # Undo last operation, no questions asked
-jj op log                # See full operation history if you need to go further back
-jj op restore <op-id>    # Jump to any point in operation history
-```
-
-Prefer `jj undo` over trying to manually reverse changes. It is always correct and safe.
-
-## Common Mistakes to Avoid
-
-- **Do not use `git add`, `git commit`, `git stash`, or `git checkout` in a jj repo.** Use jj equivalents instead.
-- **Do not try to `jj edit` an immutable (published) change** without good reason. jj will block this. If you need to fix something in published history, use `jj new <change>` to create a follow-up change instead.
-- **Do not create bookmarks for local-only work.** Bookmarks are only needed when pushing to remote. Local work is tracked by Change IDs.
-- **Do not worry about "losing" changes.** jj's operation log preserves everything. Use `jj undo` or `jj op restore` to recover from any mistake.
-
-## Quick Reference
-
-| Task | jj command |
-|------|-----------|
-| Initialize in existing git repo | `jj git init --colocate` |
-| See what's going on | `jj log` |
-| Describe current change | `jj describe -m "..."` |
-| Start next task | `jj new` |
-| Branch from specific change | `jj new <change>` |
-| Edit an older change | `jj edit <change>` |
-| Discard a change | `jj abandon` / `jj abandon <change>` |
-| Split a change | `jj split` |
-| Undo anything | `jj undo` |
-| Fetch remote | `jj git fetch` |
-| Track a remote branch | `jj bookmark track <name>@<remote>` |
-| Rebase onto master | `jj rebase -d master` |
-| Create bookmark for push | `jj bookmark create <name> -r @` |
-| Move existing bookmark | `jj bookmark set <name> -r <change>` |
-| Push to remote | `jj git push` |
-| Push specific bookmark | `jj git push --bookmark <name>` |
-| Push bookmark deletions | `jj git push --deleted` |
-| Merge multiple changes | `jj new <chg1> <chg2> ...` |
-| Parallel workspace | `jj workspace add <path>` |
-
-## Beyond This Skill
-
-This skill covers the most common operations. For advanced usage not covered here, use:
-
-```bash
-jj help                  # List all commands
-jj help <command>        # Detailed help for a specific command
-jj help -k <keyword>     # Search help by keyword
-```
-
-jj has rich functionality (revsets, templates, custom aliases, conflict resolution, etc.) that you can explore via `jj help` and apply based on the situation. The official documentation is at https://jj-vcs.github.io/jj/.
+Official documentation: https://docs.jj-vcs.dev/
+Version changes: https://github.com/jj-vcs/jj/blob/v0.46.0/CHANGELOG.md
