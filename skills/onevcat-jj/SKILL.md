@@ -80,7 +80,7 @@ jj abandon <change>
 
 Use explicit filesets plus -m for non-interactive splitting. Bare jj split opens a diff editor; in 0.46, interactive splitting uses one description-editor session for the resulting commits. Avoid bare squash when it could open an editor; supply -m or --use-destination-message.
 
-**jj abandon discards the change's own diff** and rebases descendants onto its parents. It does not absorb the diff into its parent. Bookmarks on abandoned changes normally move to their parents; abandoning is not a reliable way to delete a bookmark or a remote branch. Inspect the result and delete the bookmark explicitly when intended.
+**jj abandon discards the change's own diff** and rebases descendants onto its parents. It does not absorb the diff into its parent. By default, jj 0.46 deletes local bookmarks pointing to abandoned revisions. Pass --retain-bookmarks to move those bookmarks to the parent revisions instead. Remote deletion is a separate push action; inspect pending deletions before publishing them.
 
 ## Remote Interaction
 
@@ -110,7 +110,7 @@ For intentional branch deletion, use jj bookmark delete <name>, inspect remote d
 
 Since 0.44, tags have remote tracking state: fetched tags are tracked by default, and tracked tags participate in pushes. jj git push --all includes tags as well as bookmarks. Prefer an explicit bookmark for a branch-only push. In 0.46, --remote can be repeated and accepts patterns; inspect targets before pushing to multiple remotes.
 
-In colocated workspaces, jj git import/export are disabled by default since 0.44. Do not prescribe them as routine synchronization or bypass the restriction blindly; inspect jj status and installed help when diagnosing Git interoperability.
+In colocated workspaces, explicit jj git import/export normally do no work: jj 0.46 exits successfully with 'No import needed in colocated workspaces.' or 'No export needed in colocated workspaces.' Do not treat the successful exit code as evidence that manual synchronization occurred. Inspect jj status and installed help when diagnosing Git interoperability.
 
 ## Parallel Workspaces
 
